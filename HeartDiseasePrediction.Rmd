@@ -1,0 +1,364 @@
+---
+title: "EDA"
+author: "Tanush"
+date: "4/28/2022"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+# Data Cleaning
+
+```{r}
+heart_disease <- read.csv("heart.csv")
+head(heart_disease)
+```
+
+```{r}
+colnames(heart_disease)
+```
+
+## Check missing values and duplicates
+```{r}
+sum(is.na(heart_disease))
+sum(duplicated(heart_disease))
+```
+
+There are no missing values and duplicates in this data set.
+
+##Categorical Variable 
+
+```{r}
+subgroup = function(df, varname) {
+    df %>%
+      group_by({{varname}}) %>%
+      summarise(count = n()) %>%
+      mutate(proportion = round(count / sum(count), 3)) %>% 
+      arrange(desc(proportion))
+}
+
+subgroup(heart_disease, Sex)
+subgroup(heart_disease, ChestPainType)
+subgroup(heart_disease, RestingECG)
+subgroup(heart_disease, ExerciseAngina)
+subgroup(heart_disease, ST_Slope)
+subgroup(heart_disease, HeartDisease)
+```
+
+##Continuous Variable:
+
+### Age
+```{r}
+summary(heart_disease$Age)
+```
+
+### Resting Blood Pressure
+```{r}
+summary(heart_disease$RestingBP)
+
+# Blood Pressure cannot be less than 60
+heart_disease %>% count(RestingBP < 60)
+```
+
+
+
+### Cholesterol 
+```{r}
+summary(heart_disease$Cholesterol)
+
+#Cholesterol cannot be 0
+heart_disease %>% count(Cholesterol==0)
+```
+
+
+
+### Max Heart Rate
+```{r}
+summary(heart_disease$MaxHR)
+```
+
+## Modify some problematic values
+
+```{r}
+# Modifying 0 values to NA in RestingBP and Cholesterol
+heart_disease = heart_disease %>% 
+  mutate(across(c(RestingBP, Cholesterol), ~ifelse(.x == 0, NA, .x)))
+
+```
+
+```{r}
+# Recode ExerciseAngina to 0/1 for further analysis
+heart_disease$ExerciseAngina = ifelse(heart_disease$ExerciseAngina == "Y",1L,0L)                                    
+
+# Factorize Heartdisease
+heart_disease$HeartDisease <- ifelse(heart_disease$HeartDisease == 1, "yes", "no")
+heart_disease$HeartDisease = as.factor(heart_disease$HeartDisease)
+```
+
+```{r}
+# create summary table for numerical variables versus heart disease status
+heart_disease %>%
+  drop_na() %>%
+  select(HeartDisease, Age, RestingBP, Cholesterol, FastingBS, MaxHR, ExerciseAngina, Oldpeak) %>% 
+  group_by(HeartDisease) %>% 
+  summarise_all(.funs = "mean")
+```
+# Plots
+## Sex
+```{r}
+heart_disease %>% 
+  ggplot(aes(x=Sex, fill=HeartDisease)) + 
+  geom_bar(position=position_dodge())
+```
+
+## Age
+```{r}
+heart_disease %>% 
+  ggplot(aes(x=Age, fill=HeartDisease)) + 
+  geom_histogram(position=position_dodge())
+```
+
+## Chest pain type
+```{r}
+heart_disease %>% 
+  ggplot(aes(x=ChestPainType, fill=HeartDisease)) + 
+  geom_bar(position=position_dodge())
+```
+
+## Resting BP
+```{r}
+heart_disease %>% 
+  ggplot(aes(x=RestingBP, fill=HeartDisease)) + 
+  geom_histogram(position=position_dodge())
+```
+
+## Cholestrol
+```{r}
+heart_disease %>% 
+  ggplot(aes(x=Cholesterol, fill=HeartDisease)) + 
+  geom_histogram(position=position_dodge())
+```
+
+# Modeling
+## Tree-based Classification models
+### Classification Trees
+```{r}
+set.seed(123)
+library(rpart)
+library(rpart.plot)
+```
+
+```{r}
+ct_model<-rpart(HeartDisease~.,           # model formula
+                data=heart_disease,                             # dataset
+                method="class",                           # "class" indicates a classification tree model 
+                control=rpart.control(cp=0.03,maxdepth=4))   # tree control parameters. 
+
+ct_model
+rpart.plot(ct_model)   # tree plot
+```
+
+```{r}
+ct_pred_class<-predict(ct_model,type="class") # class membership (yes or no) 
+head(ct_pred_class)
+
+ct_pred<-predict(ct_model)  # get the predicted values - class probabilities (default)
+head(ct_pred)
+```
+
+```{r}
+heart_disease_pred <- heart_disease
+heart_disease_pred$ct_pred_prob <- ct_pred[,2]
+heart_disease_pred$ct_pred_class<-ifelse(heart_disease_pred$ct_pred_prob>0.5,"yes","no")  
+table(heart_disease_pred$ct_pred_class, heart_disease_pred$HeartDisease, dnn=c("predicted","actual"))
+```
+
+
+
+### Random Forest
+
+```{r}
+library(randomForest)
+rf_model<-randomForest(HeartDisease~.,              # model formula
+                       data=heart_disease,ntree=500, cutoff=c(0.5,0.5), na.action = na.exclude)
+print(rf_model)
+head(rf_model$votes)       # indicates the % of trees that voted for each class
+head(rf_model$predicted)   # the class favored by more trees (i.e. majority vote wins) 
+```
+
+```{r}
+varImpPlot(rf_model)
+```
+
+## Linear Classifier
+### Logistic Regression
+
+```{r}
+logit_model<-glm(HeartDisease~.,  # generalized linear models
+                 family="binomial",               # specifying error distribution
+                 data=heart_disease)                    # dataset
+summary(logit_model)
+```
+
+```{r}
+heart_disease_pred <- na.omit(heart_disease_pred)
+heart_disease_pred$log_odd<-predict(logit_model)                         # get predicted log odds (default)
+heart_disease_pred$logit_pred_prob<-predict(logit_model,type="response") # get predicted probabilities
+heart_disease_pred$logit_pred_class<-ifelse(heart_disease_pred$logit_pred_prob>0.5,"Yes","No")
+table(heart_disease_pred$logit_pred_class, heart_disease_pred$HeartDisease, dnn=c("predicted","actual"))
+```
+
+# Model Validation & Model Tuning
+## Classification Tree Model
+### Hold out sample
+```{r}
+set.seed(123)
+index <- sample(1:nrow(heart_disease), nrow(heart_disease)*0.2)
+test <- heart_disease[index,]       # save 20% as a test dataset
+training <-heart_disease[-index,]   # save the rest as a training set
+```
+
+```{r}
+training_model<-rpart(HeartDisease~.,
+                      data=training, 
+                      method="class", 
+                      control=rpart.control(cp=0.03, maxdepth=4))
+
+rpart.plot(training_model)
+```
+
+### Predicting probabilities/class labels for test data
+```{r}
+test$ct_pred_prob<-predict(training_model,test)[,2]
+test$ct_pred_class<-predict(training_model,test,type="class")
+table(test$ct_pred_class,test$HeartDisease, dnn=c("predicted","actual"))  # confusion table on test data
+```
+
+Accuracy = $(67+92)/183=0.869$
+
+### Classification tree pruning
+```{r}
+printcp(training_model)
+plotcp(training_model)
+```
+
+```{r}
+min_xerror<-training_model$cptable[which.min(training_model$cptable[,"xerror"]),]
+min_xerror
+
+# prune tree with minimum cp value
+min_xerror_tree<-prune(training_model, cp=min_xerror[1])
+rpart.plot(min_xerror_tree)
+```
+
+```{r}
+bp_tree<-min_xerror_tree
+test$ct_bp_pred_prob<-predict(bp_tree,test)[,2]
+test$ct_bp_pred_class=ifelse(test$ct_bp_pred_prob>0.5,"Yes","No")
+
+table(test$ct_bp_pred_class,test$HeartDisease, dnn=c("predicted","actual"))  # confusion table on test data
+```
+
+Accuracy on test data set $=(67+92)/183=0.869$
+
+## Random Forest
+### hold-out validation
+```{r}
+set.seed(1)
+training <- na.omit(training)
+rf_training_model<-randomForest(HeartDisease~.,              # model formula
+                       data=training,          # use a training dataset for building a model
+                       ntree=500,                     
+                       cutoff=c(0.5,0.5), 
+                       mtry=1,
+                       importance=TRUE)
+
+rf_training_model
+```
+
+### Hyperparameter Tuning
+```{r}
+# Execute the tuning process
+set.seed(123)              
+res <- tuneRF(x = training%>%select(-HeartDisease),
+              y = training$HeartDisease,mtryStart=2,
+              ntreeTry = 500)
+```
+
+
+
+```{r}
+rf_best_model<-randomForest(HeartDisease~.,              # model formula
+                       data=training,          # use a training dataset for building a model
+                       ntree=500,                     
+                       cutoff=c(0.5,0.5), 
+                       mtry=2,
+                       importance=TRUE)
+rf_best_model
+
+test$rf_pred_prob<-predict(rf_best_model,test,type="prob")[,2]   #use a test dataset for model evaluation
+test$rf_pred_class<-predict(rf_best_model,test,type="class")
+table(test$rf_pred_class,test$HeartDisease, dnn=c("predicted","actual"))  # confusion table on test data
+```
+
+Accuracy on test data set $=(68+62)/143=0.909$
+
+## Logistic Regression
+### Holdout sample
+```{r}
+logit_training_model<-glm(HeartDisease~.,family="binomial",data=training)
+summary(logit_training_model)
+```
+
+### Stepwise Regression
+```{r}
+# Specify a null model with no predictors
+null_model <- glm(HeartDisease~1, data = training, family = "binomial")
+
+# Specify the full model using all of the potential predictors
+full_model <- glm(HeartDisease~., data = training, family = "binomial")
+
+# Use a forward stepwise algorithm to build a parsimonious model
+forward_model <- step(null_model, scope = list(lower = null_model, upper = full_model), direction = "forward")
+summary(forward_model)
+# Use a forward stepwise algorithm to build a parsimonious model
+backward_model <- step(full_model, scope = list(lower = null_model, upper = full_model), direction = "backward")
+summary(backward_model)
+
+```
+
+We get the same set of variables for both forward and backward model
+
+```{r}
+logit_best_model<-glm(HeartDisease ~ Age + Sex + ChestPainType + Cholesterol + 
+    FastingBS + ExerciseAngina + Oldpeak + ST_Slope,family="binomial",data=training)
+summary(logit_best_model)
+
+test$logit_pred_prob<-predict(logit_best_model,test,type="response")
+test$logit_pred_class<-ifelse(test$logit_pred_prob>0.5,"Yes","No") 
+table(test$logit_pred_class,test$HeartDisease, dnn=c("predicted","actual"))  # confusion table on test data
+```
+
+Accuracy on test data set $=(65+64)/143=0.902$
+
+## Performance Visualization with ROC
+```{r}
+library(pROC)
+ct_roc<-roc(test$HeartDisease,test$ct_pred_prob,auc=TRUE)
+rf_roc<-roc(test$HeartDisease,test$rf_pred_prob,auc=TRUE)
+logit_roc<-roc(test$HeartDisease,test$logit_pred_prob,auc=TRUE)
+
+plot(ct_roc,print.auc=TRUE,col="blue")
+plot(rf_roc,print.auc=TRUE,print.auc.y=.4,col="green", add=TRUE)
+plot(logit_roc,print.auc=TRUE,print.auc.y=.3, col="red",add=TRUE)
+```
+
+Random Forest is the best model, followed by Logistic Regression. The worst is classification tree. 
